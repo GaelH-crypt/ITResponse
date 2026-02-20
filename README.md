@@ -596,5 +596,6 @@ Le rapport généré par IncidentKit (rapport technique, synthèse exécutive, s
 ---
 
 *Document généré pour IncidentKit v0.1 — Manuel opérationnel, usage RSI / administrateur système.*
-#   I T R e s p o n s e  
+#   I T R e s p o n s e 
+ 
  "# ITResponse" 
