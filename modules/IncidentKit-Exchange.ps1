@@ -61,6 +61,31 @@ function Get-ExchangeSession {
     }
 }
 
+function Get-MailboxDelegationUnexpectedReason {
+    [CmdletBinding()]
+    param(
+        [string]$MailboxIdentity,
+        [string]$DelegateIdentity,
+        [string[]]$ExpectedDelegates
+    )
+    if (-not $DelegateIdentity) { return $null }
+    $delegate = $DelegateIdentity.Trim().ToLowerInvariant()
+    $mailbox = if ($MailboxIdentity) { $MailboxIdentity.Trim().ToLowerInvariant() } else { '' }
+
+    if (-not $delegate -or $delegate -eq 'nt authority\\self') { return $null }
+    if ($delegate -match '^s-1-5-') { return $null }
+    if ($delegate -match 'nt authority\\|exchange trusted|healthmailbox|discoverysearchmailbox|federatedemail') { return $null }
+    if ($mailbox -and $delegate -eq $mailbox) { return $null }
+
+    $expected = @($ExpectedDelegates | Where-Object { $_ } | ForEach-Object { $_.ToString().Trim().ToLowerInvariant() })
+    if ($expected.Count -gt 0 -and $expected -contains $delegate) { return $null }
+
+    if ($expected.Count -eq 0) {
+        return 'Aucune liste d''autorisations attendues définie'
+    }
+    return 'Compte absent de exchange.mailboxDelegation.expectedDelegates'
+}
+
 function Invoke-IncidentKitExchangeCollect {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -78,6 +103,7 @@ function Invoke-IncidentKitExchangeCollect {
 
     $rulesPath = Join-Path $exDir 'exchange_rules.csv'
     $forwardPath = Join-Path $exDir 'exchange_forwarding.csv'
+    $delegationPath = Join-Path $exDir 'exchange_delegations.csv'
     $findingsPath = Join-Path $exDir 'exchange_findings.json'
 
     if (-not $Config.exchange -or -not $Config.exchange.psUri) {
@@ -85,16 +111,17 @@ function Invoke-IncidentKitExchangeCollect {
         if (-not $WhatIf) {
             @() | Export-Csv -Path $rulesPath -NoTypeInformation -Encoding UTF8
             @() | Export-Csv -Path $forwardPath -NoTypeInformation -Encoding UTF8
-            @{ error = 'Exchange non configuré'; suspiciousRules = @(); externalForwarding = @() } | ConvertTo-Json | Set-Content -Path $findingsPath -Encoding UTF8
+            @() | Export-Csv -Path $delegationPath -NoTypeInformation -Encoding UTF8
+            @{ error = 'Exchange non configuré'; suspiciousRules = @(); externalForwarding = @(); suspiciousDelegations = @() } | ConvertTo-Json | Set-Content -Path $findingsPath -Encoding UTF8
         }
-        return @{ Success = $false; Error = 'Exchange non configuré'; RulesPath = $rulesPath; ForwardPath = $forwardPath; FindingsPath = $findingsPath }
+        return @{ Success = $false; Error = 'Exchange non configuré'; RulesPath = $rulesPath; ForwardPath = $forwardPath; DelegationPath = $delegationPath; FindingsPath = $findingsPath }
     }
 
     $session = $null
     try {
         if ($WhatIf) {
             & $Log "WhatIf: connexion Exchange à $($Config.exchange.psUri) puis collecte règles/forwarding."
-            return @{ Success = $true; WhatIf = $true; RulesPath = $rulesPath; ForwardPath = $forwardPath; FindingsPath = $findingsPath }
+            return @{ Success = $true; WhatIf = $true; RulesPath = $rulesPath; ForwardPath = $forwardPath; DelegationPath = $delegationPath; FindingsPath = $findingsPath }
         }
 
         $session = Get-ExchangeSession -PsUri $Config.exchange.psUri -Auth $Config.exchange.auth -UseSSL $Config.exchange.useSSL -Credential $Credential -Log $Log
@@ -102,8 +129,10 @@ function Invoke-IncidentKitExchangeCollect {
 
         $allRules = @()
         $allForwarding = @()
+        $allDelegations = @()
         $suspiciousRules = [System.Collections.ArrayList]::new()
         $externalForwarding = [System.Collections.ArrayList]::new()
+        $suspiciousDelegations = [System.Collections.ArrayList]::new()
 
         if ($Config.exchange.checks.inboxRules) {
             try {
@@ -177,14 +206,126 @@ function Invoke-IncidentKitExchangeCollect {
             }
         }
 
+        if ($Config.exchange.checks.mailboxDelegation) {
+            try {
+                $delegationScope = if ($Config.exchange.mailboxDelegation.scope) { $Config.exchange.mailboxDelegation.scope.ToString().ToLowerInvariant() } else { 'vip' }
+                $vipListPath = if ($Config.exchange.mailboxDelegation.vipListPath) { $Config.exchange.mailboxDelegation.vipListPath } else { 'vip_list.txt' }
+                if (-not [System.IO.Path]::IsPathRooted($vipListPath)) {
+                    $vipListPath = Join-Path $PSScriptRoot "..\\$vipListPath"
+                }
+                $expectedDelegates = @($Config.exchange.mailboxDelegation.expectedDelegates)
+                $targetMailboxes = @()
+
+                if ($delegationScope -eq 'all') {
+                    $targetMailboxes = @(Get-Mailbox -ResultSize Unlimited -ErrorAction Stop)
+                    & $Log "MailboxDelegation: collecte sur toutes les boîtes ($($targetMailboxes.Count))."
+                } else {
+                    if (Test-Path -LiteralPath $vipListPath) {
+                        $vipEntries = Get-Content -Path $vipListPath -Encoding UTF8 -ErrorAction Stop | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^\s*#' }
+                        foreach ($entry in $vipEntries) {
+                            try {
+                                $targetMailboxes += Get-Mailbox -Identity $entry -ErrorAction Stop
+                            } catch {
+                                & $Log "MailboxDelegation: VIP introuvable '$entry' : $_"
+                            }
+                        }
+                    } else {
+                        & $Log "MailboxDelegation: fichier VIP introuvable ($vipListPath)."
+                    }
+                    & $Log "MailboxDelegation: collecte sur $($targetMailboxes.Count) boîte(s) VIP."
+                }
+
+                foreach ($mb in ($targetMailboxes | Sort-Object -Property Identity -Unique)) {
+                    $mailboxIdentity = $mb.Identity.ToString()
+
+                    try {
+                        $fullPerms = Get-MailboxPermission -Identity $mailboxIdentity -ErrorAction SilentlyContinue | Where-Object {
+                            $_.AccessRights -match 'FullAccess' -and
+                            -not $_.IsInherited -and
+                            $_.User -and
+                            $_.User.ToString() -notmatch 'NT AUTHORITY\\SELF|S-1-5-10|S-1-5-21|DiscoverySearchMailbox|HealthMailbox|Exchange Trusted Subsystem'
+                        }
+                        foreach ($p in $fullPerms) {
+                            $delegate = $p.User.ToString()
+                            $unexpectedReason = Get-MailboxDelegationUnexpectedReason -MailboxIdentity $mailboxIdentity -DelegateIdentity $delegate -ExpectedDelegates $expectedDelegates
+                            $row = [PSCustomObject]@{
+                                MailboxIdentity = $mailboxIdentity
+                                Delegate        = $delegate
+                                DelegationType  = 'FullAccess'
+                                Source          = 'Get-MailboxPermission'
+                                IsUnexpected    = [bool]($null -ne $unexpectedReason)
+                                Reason          = $unexpectedReason
+                            }
+                            $allDelegations += $row
+                            if ($row.IsUnexpected) { [void]$suspiciousDelegations.Add($row) }
+                        }
+                    } catch {
+                        & $Log "MailboxDelegation FullAccess pour $mailboxIdentity : $_"
+                    }
+
+                    try {
+                        $sendAsPerms = Get-ADPermission -Identity $mailboxIdentity -ErrorAction SilentlyContinue | Where-Object {
+                            $_.ExtendedRights -contains 'Send As' -and
+                            -not $_.IsInherited -and
+                            $_.User -and
+                            $_.User.ToString() -notmatch 'NT AUTHORITY\\SELF|S-1-5-10|S-1-5-21|DiscoverySearchMailbox|HealthMailbox|Exchange Trusted Subsystem'
+                        }
+                        foreach ($p in $sendAsPerms) {
+                            $delegate = $p.User.ToString()
+                            $unexpectedReason = Get-MailboxDelegationUnexpectedReason -MailboxIdentity $mailboxIdentity -DelegateIdentity $delegate -ExpectedDelegates $expectedDelegates
+                            $row = [PSCustomObject]@{
+                                MailboxIdentity = $mailboxIdentity
+                                Delegate        = $delegate
+                                DelegationType  = 'SendAs'
+                                Source          = 'Get-ADPermission'
+                                IsUnexpected    = [bool]($null -ne $unexpectedReason)
+                                Reason          = $unexpectedReason
+                            }
+                            $allDelegations += $row
+                            if ($row.IsUnexpected) { [void]$suspiciousDelegations.Add($row) }
+                        }
+                    } catch {
+                        & $Log "MailboxDelegation SendAs pour $mailboxIdentity : $_"
+                    }
+
+                    try {
+                        $onBehalfTo = @($mb.GrantSendOnBehalfTo)
+                        foreach ($grant in $onBehalfTo) {
+                            $delegate = $grant.ToString()
+                            if (-not $delegate) { continue }
+                            $unexpectedReason = Get-MailboxDelegationUnexpectedReason -MailboxIdentity $mailboxIdentity -DelegateIdentity $delegate -ExpectedDelegates $expectedDelegates
+                            $row = [PSCustomObject]@{
+                                MailboxIdentity = $mailboxIdentity
+                                Delegate        = $delegate
+                                DelegationType  = 'SendOnBehalf'
+                                Source          = 'GrantSendOnBehalfTo'
+                                IsUnexpected    = [bool]($null -ne $unexpectedReason)
+                                Reason          = $unexpectedReason
+                            }
+                            $allDelegations += $row
+                            if ($row.IsUnexpected) { [void]$suspiciousDelegations.Add($row) }
+                        }
+                    } catch {
+                        & $Log "MailboxDelegation GrantSendOnBehalfTo pour $mailboxIdentity : $_"
+                    }
+                }
+            } catch {
+                & $Log "Collecte MailboxDelegation : $_"
+                & $Log "Exception: $($_.Exception.GetType().FullName)"
+                if ($_.ScriptStackTrace) { & $Log "StackTrace: $($_.ScriptStackTrace)" }
+            }
+        }
+
         $allRules | Export-Csv -Path $rulesPath -NoTypeInformation -Encoding UTF8
         $allForwarding | Export-Csv -Path $forwardPath -NoTypeInformation -Encoding UTF8
+        $allDelegations | Export-Csv -Path $delegationPath -NoTypeInformation -Encoding UTF8
         $findingsObj = @{
             suspiciousRules    = @($suspiciousRules)
             externalForwarding = @($externalForwarding)
+            suspiciousDelegations = @($suspiciousDelegations)
         }
         $findingsObj | ConvertTo-Json -Depth 4 | Set-Content -Path $findingsPath -Encoding UTF8
-        return @{ Success = $true; RulesPath = $rulesPath; ForwardPath = $forwardPath; FindingsPath = $findingsPath }
+        return @{ Success = $true; RulesPath = $rulesPath; ForwardPath = $forwardPath; DelegationPath = $delegationPath; FindingsPath = $findingsPath }
     } catch {
         & $Log "Exchange : $_"
         & $Log "Exception: $($_.Exception.GetType().FullName)"
@@ -193,9 +334,10 @@ function Invoke-IncidentKitExchangeCollect {
             if (-not (Test-Path $exDir)) { New-Item -ItemType Directory -Path $exDir -Force | Out-Null }
             @() | Export-Csv -Path $rulesPath -NoTypeInformation -Encoding UTF8
             @() | Export-Csv -Path $forwardPath -NoTypeInformation -Encoding UTF8
-            @{ error = $_.Exception.Message; suspiciousRules = @(); externalForwarding = @() } | ConvertTo-Json | Set-Content -Path $findingsPath -Encoding UTF8
+            @() | Export-Csv -Path $delegationPath -NoTypeInformation -Encoding UTF8
+            @{ error = $_.Exception.Message; suspiciousRules = @(); externalForwarding = @(); suspiciousDelegations = @() } | ConvertTo-Json | Set-Content -Path $findingsPath -Encoding UTF8
         }
-        return @{ Success = $false; Error = $_.Exception.Message; RulesPath = $rulesPath; ForwardPath = $forwardPath; FindingsPath = $findingsPath }
+        return @{ Success = $false; Error = $_.Exception.Message; RulesPath = $rulesPath; ForwardPath = $forwardPath; DelegationPath = $delegationPath; FindingsPath = $findingsPath }
     } finally {
         if ($session) {
             Remove-PSSession -Session $session -ErrorAction SilentlyContinue
@@ -203,4 +345,4 @@ function Invoke-IncidentKitExchangeCollect {
     }
 }
 
-export-modulemember -Function Invoke-IncidentKitExchangeCollect, Test-SmtpAddressExternal, Get-ExchangeSession
+export-modulemember -Function Invoke-IncidentKitExchangeCollect, Test-SmtpAddressExternal, Get-ExchangeSession, Get-MailboxDelegationUnexpectedReason

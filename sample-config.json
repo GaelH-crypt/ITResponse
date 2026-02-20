@@ -23,7 +23,13 @@
     "useSSL": false,
     "checks": {
       "inboxRules": true,
-      "forwarding": true
+      "forwarding": true,
+      "mailboxDelegation": false
+    },
+    "mailboxDelegation": {
+      "scope": "vip",
+      "vipListPath": "vip_list.txt",
+      "expectedDelegates": []
     }
   },
   "endpoint": {
