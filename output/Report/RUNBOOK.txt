@@ -1,0 +1,31 @@
+RUNBOOK IR (M365/AD/Endpoint)
+
+1) Commandes exactes
+
+Collect
+- .\IncidentKit.ps1 -ConfigFile .\sample-config.json -CollectOnly
+- .\IncidentKit.ps1 -ConfigFile .\sample-config.json -SkipContainment
+
+Investigate
+- .\IncidentKit.ps1 -ConfigFile .\sample-config.json -GenerateReportOnly
+- Import-Csv .\output\Exchange\forwarding_rules.csv
+- Import-Csv .\output\Endpoint\suspicious_processes.csv
+
+Contain
+- .\IncidentKit.ps1 -ConfigFile .\sample-config.json
+- .\IncidentKit.ps1 -ConfigFile .\sample-config.json -DisableADAccounts -BlockExternalForwarding
+
+2) 5 choses à vérifier
+- AD admin: comptes à privilèges récemment modifiés/activés.
+- IP externe: connexions depuis IP/régions inhabituelles.
+- Forwarding externe: règles mailbox vers domaines non approuvés.
+- Coverage logs: présence/continuité des logs AD, M365, Endpoint.
+- Endpoint persistence: tâches planifiées, services, Run keys, WMI, startup.
+
+3) Quand escalader
+Escalader immédiatement si au moins un critère est vrai:
+- Compte admin compromis (ou élévation de privilèges confirmée).
+- Exfiltration suspectée/confirmée (forwarding externe actif, gros volumes sortants).
+- Mouvement latéral ou persistance active sur plusieurs hôtes.
+- Logs insuffisants pour statuer avec confiance.
+- Impact business élevé (VIP/C-level, production critique, obligations légales).
