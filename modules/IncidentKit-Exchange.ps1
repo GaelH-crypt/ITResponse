@@ -86,6 +86,17 @@ function Get-MailboxDelegationUnexpectedReason {
     return 'Compte absent de exchange.mailboxDelegation.expectedDelegates'
 }
 
+function Test-ExternalSmartHost {
+    param([string]$Host)
+    if (-not $Host) { return $false }
+    $h = $Host.Trim().ToLowerInvariant()
+    if (-not $h) { return $false }
+    if ($h -eq 'localhost') { return $false }
+    if ($h -match '\.local$|\.lan$|\.internal$') { return $false }
+    if ($h -match '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)') { return $false }
+    return $true
+}
+
 function Invoke-IncidentKitExchangeCollect {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -361,4 +372,4 @@ function Invoke-IncidentKitExchangeCollect {
     }
 }
 
-export-modulemember -Function Invoke-IncidentKitExchangeCollect, Test-SmtpAddressExternal, Get-ExchangeSession, Get-MailboxDelegationUnexpectedReason
+export-modulemember -Function Invoke-IncidentKitExchangeCollect, Test-SmtpAddressExternal, Get-ExchangeSession, Get-MailboxDelegationUnexpectedReason, Test-ExternalSmartHost
