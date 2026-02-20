@@ -119,8 +119,9 @@ $script:Log = {
 & $script:Log "Dossier de sortie: $runDir"
 
 # --- Santé des journaux (avant toute analyse) ---
+$loggingHealthResult = $null
 try {
-    $null = Test-LoggingHealth -Config $config -OutputDir $runDir -Credential $cred -Log $script:Log -WhatIf:$WhatIf
+    $loggingHealthResult = Test-LoggingHealth -Config $config -OutputDir $runDir -Credential $cred -Log $script:Log -WhatIf:$WhatIf
 } catch {
     & $script:Log "Check-LoggingHealth : erreur $_"
     & $script:Log "Exception: $($_.Exception.GetType().FullName)"
@@ -143,6 +144,9 @@ if (-not $adResult.Success -and -not $adDetail) { $adDetail = "DC inaccessible" 
 if ($adResult.CoverageIncomplete) {
     Write-Warning "ATTENTION : la période demandée n'est pas entièrement couverte par les journaux disponibles."
 }
+if (-not $adResult.Success) {
+    Write-Warning "Source AD absente ou inaccessible ; vérifiez la connectivité au contrôleur de domaine et les permissions."
+}
 
 # --- Exchange ---
 $exResult = $null
@@ -156,9 +160,13 @@ try {
 }
 $exStatus = if ($exResult.Success) { "OK" } else { "Erreur / Non accessible" }
 $exDetail = if ($exResult.Error) { $exResult.Error } else { if ($exResult.Success) { "Règles et forwarding exportés" } else { "Vérifier connectivité et identifiants" } }
+if (-not $exResult.Success) {
+    Write-Warning "Source Exchange absente ou inaccessible ; vérifiez la configuration et la connectivité Exchange."
+}
 
 # --- Endpoint ---
 $epResult = $null
+$endpointCollectStartedAt = (Get-Date).ToString('o')
 try {
     $epResult = Invoke-IncidentKitEndpointCollect -Config $config -TargetHost $TargetHost -OutputDir $runDir -Credential $cred -Log $script:Log -WhatIf:$WhatIf
 } catch {
@@ -167,8 +175,63 @@ try {
     & $script:Log "Exception: $($_.Exception.GetType().FullName)"
     if ($_.ScriptStackTrace) { & $script:Log "StackTrace: $($_.ScriptStackTrace)" }
 }
+$endpointCollectEndedAt = (Get-Date).ToString('o')
 $epStatus = if ($epResult.Skipped) { "Non demandé" } elseif ($epResult.Success) { "OK" } else { "Erreur" }
 $epDetail = if ($epResult.Skipped) { "Pas de -TargetHost" } else { if ($epResult.Error) { $epResult.Error } else { "Collecte effectuée" } }
+if ($epResult.Skipped -or -not $epResult.Success) {
+    Write-Warning "Source Endpoint absente ; fournissez -TargetHost et vérifiez WinRM/connectivité si collecte distante."
+}
+
+# --- Coverage / disponibilité des sources ---
+$exchangeChecks = if ($config.exchange -and $config.exchange.checks) { $config.exchange.checks } else { $null }
+$exchangeInboxRulesCollected = [bool]($exResult.Success -and $exchangeChecks -and $exchangeChecks.inboxRules)
+$exchangeForwardingCollected = [bool]($exResult.Success -and $exchangeChecks -and $exchangeChecks.forwarding)
+$iisLogsFound = [bool]($loggingHealthResult -and $loggingHealthResult.ExchangeIISLogsPresent)
+$lastIisLogTimestamp = $null
+if ($exchangeChecks -and $exchangeChecks.owaIisLogPath) {
+    try {
+        $iisPath = $exchangeChecks.owaIisLogPath
+        if (Test-Path -LiteralPath $iisPath -PathType Container -ErrorAction SilentlyContinue) {
+            $lastIisLog = Get-ChildItem -LiteralPath $iisPath -File -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+            if ($lastIisLog) {
+                $lastIisLogTimestamp = $lastIisLog.LastWriteTime.ToString('o')
+            }
+        }
+    } catch {
+        & $script:Log "Détection dernier log IIS : $_"
+    }
+}
+
+$endpointCollectedMode = if ($epResult.Skipped) { 'none' } elseif ($epResult.Local) { 'local' } elseif ($epResult.Remote) { 'remote' } else { 'unknown' }
+$endpointWinRMOk = if ($epResult.Skipped -or $epResult.Local) { $null } else { [bool]$epResult.Success }
+
+if (-not $WhatIf) {
+    $healthDir = Join-Path $runDir 'HealthCheck'
+    if (-not (Test-Path $healthDir)) { New-Item -ItemType Directory -Path $healthDir -Force | Out-Null }
+    $coverageSummary = [ordered]@{
+        AD = [ordered]@{
+            DaysCovered = if ($loggingHealthResult) { $loggingHealthResult.DaysCovered } else { $null }
+            CoverageIncomplete = [bool]$adResult.CoverageIncomplete
+        }
+        Exchange = [ordered]@{
+            InboxRulesCollected = if ($exchangeInboxRulesCollected) { 'yes' } else { 'no' }
+            ForwardingCollected = if ($exchangeForwardingCollected) { 'yes' } else { 'no' }
+            IISLogsFound = if ($iisLogsFound) { 'yes' } else { 'no' }
+            LastIISLogTimestamp = $lastIisLogTimestamp
+        }
+        Endpoint = [ordered]@{
+            Collected = $endpointCollectedMode
+            WinRMOk = $endpointWinRMOk
+            CollectionStartedAt = $endpointCollectStartedAt
+            CollectionEndedAt = $endpointCollectEndedAt
+        }
+    }
+    $coveragePath = Join-Path $healthDir 'coverage.json'
+    $coverageSummary | ConvertTo-Json -Depth 4 | Set-Content -Path $coveragePath -Encoding UTF8
+    & $script:Log "Coverage summary écrit : $coveragePath"
+}
 
 $reportDir = Join-Path $runDir 'Report'
 $ebios = $null
