@@ -9,6 +9,8 @@
     "domainNetbios": "CONTOSO",
     "dcList": [ "dc01.contoso.local", "dc02.contoso.local" ],
     "preferredDc": "dc01.contoso.local",
+    "exportEvtx": true,
+    "evtxMaxSizeMb": 200,
     "eventIds": [ 4624, 4625, 4672, 4720, 4722, 4728, 4732, 4740 ],
     "timeWindowDays": 7,
     "exportPaths": {

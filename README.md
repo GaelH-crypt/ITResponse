@@ -213,9 +213,13 @@ Le fichier `config.json` pilote tous les composants. Chaque section est décrite
 | **domainNetbios** | Nom NetBIOS du domaine (ex. `CONTOSO`). |
 | **dcList** | Liste des contrôleurs de domaine (FQDN), ex. `["dc01.contoso.local","dc02.contoso.local"]`. |
 | **preferredDc** | DC utilisé en priorité pour la collecte (ex. `dc01.contoso.local`). |
-| **eventIds** | Identifiants des événements Security collectés. Par défaut : 4624, 4625, 4672, 4720, 4722, 4728, 4732, 4740 (connexions, échecs, privilèges, création de compte, modifications de groupes, etc.). |
-| **timeWindowDays** | Nombre de jours en arrière pour la collecte AD (ex. `7`). Peut être surchargé en ligne de commande avec `-TimeWindowDays`. |
+| **exportEvtx** | `true` pour exporter un extrait du journal Security au format EVTX dans `output\AD\security_export.evtx`. `false` pour désactiver (défaut). |
+| **evtxMaxSizeMb** | Taille maximale autorisée pour `security_export.evtx` (défaut: `200`). Si la limite est dépassée, le fichier EVTX est supprimé pour éviter un volume excessif. |
+| **eventIds** | Identifiants des événements Security collectés. Par défaut : 4624, 4625, 4672, 4720, 4722, 4728, 4732, 4740 (connexions, échecs, privilèges, création de compte, modifications de groupes, etc.). Ils servent aussi au filtrage de l’export EVTX. |
+| **timeWindowDays** | Nombre de jours en arrière pour la collecte AD (ex. `7`). Peut être surchargé en ligne de commande avec `-TimeWindowDays`. Cette fenêtre est également appliquée à l’export EVTX. |
 | **exportPaths** | Chemins relatifs des fichiers générés (ex. `AD/analyse_ad.csv`, `AD/ad_findings.json`). En général, ne pas modifier sauf besoin spécifique. |
+
+> ℹ️ **Limites export EVTX** : IncidentKit exporte un sous-ensemble du journal **Security** (filtré par `ad.eventIds` et `ad.timeWindowDays`). Si le fichier dépasse `ad.evtxMaxSizeMb`, il est automatiquement supprimé et un message est journalisé. Pour réduire la taille: diminuer `timeWindowDays` et/ou restreindre `eventIds`.
 
 ### Exchange (exchange)
 
@@ -270,6 +274,8 @@ Pour une analyse avancée des adresses IP (module d’analyse IP optionnel), vou
     "domainNetbios": "CONTOSO",
     "dcList": ["dc01.contoso.local", "dc02.contoso.local"],
     "preferredDc": "dc01.contoso.local",
+    "exportEvtx": true,
+    "evtxMaxSizeMb": 200,
     "eventIds": [4624, 4625, 4672, 4720, 4722, 4728, 4732, 4740],
     "timeWindowDays": 7,
     "exportPaths": {

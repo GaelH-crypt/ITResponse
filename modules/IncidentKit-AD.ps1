@@ -9,6 +9,7 @@
 param()
 
 $script:EventIdsDefault = @(4624, 4625, 4672, 4720, 4722, 4728, 4732, 4740)
+$script:EvtxMaxSizeMbDefault = 200
 
 function Get-ADSecurityEventsRaw {
     [CmdletBinding()]
@@ -114,6 +115,68 @@ function Export-ADEventsToCsvRows {
     return $rows
 }
 
+function Export-ADSecurityEvtxSubset {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ComputerName,
+        [Parameter(Mandatory = $true)]
+        [int[]]$EventIds,
+        [Parameter(Mandatory = $true)]
+        [int]$Days,
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+        [int]$MaxSizeMb = $script:EvtxMaxSizeMbDefault,
+        [System.Management.Automation.PSCredential]$Credential,
+        [switch]$WhatIf
+    )
+
+    $timeMs = [int64][Math]::Round(([TimeSpan]::FromDays($Days)).TotalMilliseconds)
+    $ids = @($EventIds | ForEach-Object { "EventID=$_" })
+    $idClause = ($ids -join ' or ')
+    $query = "*[System[($idClause) and TimeCreated[timediff(@SystemTime) <= $timeMs]]]"
+
+    if ($WhatIf) {
+        Write-Verbose "WhatIf: wevtutil epl Security '$DestinationPath' /q:\"$query\" /r:$ComputerName /ow:true"
+        return [PSCustomObject]@{ Success = $true; Path = $DestinationPath; SizeBytes = 0; Message = 'WhatIf' }
+    }
+
+    if (Test-Path -LiteralPath $DestinationPath) {
+        Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+    }
+
+    $arguments = @('epl', 'Security', $DestinationPath, "/q:$query", '/ow:true')
+    if ($ComputerName) { $arguments += "/r:$ComputerName" }
+    if ($Credential) {
+        $arguments += "/u:$($Credential.UserName)"
+        $arguments += "/p:$($Credential.GetNetworkCredential().Password)"
+    }
+
+    try {
+        & wevtutil.exe @arguments | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            return [PSCustomObject]@{ Success = $false; Path = $DestinationPath; SizeBytes = 0; Message = "wevtutil a retourné le code $LASTEXITCODE" }
+        }
+        if (-not (Test-Path -LiteralPath $DestinationPath)) {
+            return [PSCustomObject]@{ Success = $false; Path = $DestinationPath; SizeBytes = 0; Message = 'Fichier EVTX non généré' }
+        }
+        $sizeBytes = (Get-Item -LiteralPath $DestinationPath).Length
+        $maxBytes = [int64]$MaxSizeMb * 1MB
+        if ($sizeBytes -gt $maxBytes) {
+            Remove-Item -LiteralPath $DestinationPath -Force -ErrorAction SilentlyContinue
+            return [PSCustomObject]@{
+                Success = $false
+                Path = $DestinationPath
+                SizeBytes = $sizeBytes
+                Message = "Export EVTX annulé: taille $([Math]::Round($sizeBytes / 1MB, 2)) MB > limite ${MaxSizeMb} MB. Réduire ad.timeWindowDays ou ad.eventIds."
+            }
+        }
+        return [PSCustomObject]@{ Success = $true; Path = $DestinationPath; SizeBytes = $sizeBytes; Message = '' }
+    } catch {
+        return [PSCustomObject]@{ Success = $false; Path = $DestinationPath; SizeBytes = 0; Message = $_.Exception.Message }
+    }
+}
+
 function Test-IsRfc1918 {
     param([string]$Ip)
     if (-not $Ip -or $Ip -eq '-' -or $Ip -match '^::') { return $true }
@@ -198,6 +261,8 @@ function Invoke-IncidentKitADCollect {
     $days = if ($TimeWindowDays -gt 0) { $TimeWindowDays } else { $Config.ad.timeWindowDays }
     $dc = if ($Config.ad.preferredDc) { $Config.ad.preferredDc } else { $Config.ad.dcList[0] }
     $eventIds = if ($Config.ad.eventIds) { $Config.ad.eventIds } else { $script:EventIdsDefault }
+    $exportEvtx = ($Config.ad.PSObject.Properties.Name -contains 'exportEvtx' -and [bool]$Config.ad.exportEvtx)
+    $evtxMaxSizeMb = if ($Config.ad.evtxMaxSizeMb -gt 0) { [int]$Config.ad.evtxMaxSizeMb } else { $script:EvtxMaxSizeMbDefault }
 
     $adDir = Join-Path $OutputDir 'AD'
     if (-not $WhatIf) {
@@ -213,6 +278,17 @@ function Invoke-IncidentKitADCollect {
 
     $csvPath = Join-Path $adDir 'analyse_ad.csv'
     $jsonPath = Join-Path $adDir 'ad_findings.json'
+    $evtxPath = Join-Path $adDir 'security_export.evtx'
+
+    $evtxStatus = [PSCustomObject]@{ Success = $false; Path = $evtxPath; SizeBytes = 0; Message = 'Désactivé (config.ad.exportEvtx=false)' }
+    if ($exportEvtx) {
+        $evtxStatus = Export-ADSecurityEvtxSubset -ComputerName $dc -EventIds $eventIds -Days $days -DestinationPath $evtxPath -MaxSizeMb $evtxMaxSizeMb -Credential $Credential -WhatIf:$WhatIf
+        if ($evtxStatus.Success) {
+            & $Log "Export EVTX Security OK: $evtxPath ($([Math]::Round($evtxStatus.SizeBytes / 1MB, 2)) MB)"
+        } else {
+            & $Log "Export EVTX Security ignoré/échoué: $($evtxStatus.Message)"
+        }
+    }
 
     if (-not $rawResult.Success) {
         & $Log "AD : $($rawResult.Error)"
@@ -220,7 +296,7 @@ function Invoke-IncidentKitADCollect {
             @() | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             @{ error = $rawResult.Error; dcUsed = $rawResult.DcUsed; newAccounts = @(); adminGroupAdds = @(); rdpLogons = @(); externalIpLogons = @(); failurePeaksByAccount = @(); failurePeaksByIp = @() } | ConvertTo-Json -Depth 5 | Set-Content -Path $jsonPath -Encoding UTF8
         }
-        return [PSCustomObject]@{ Success = $false; Events = @(); Error = $rawResult.Error; DcUsed = $rawResult.DcUsed; EventsCount = 0; CsvPath = $csvPath; FindingsPath = $jsonPath; CoverageIncomplete = $false; CoverageMessage = '' }
+        return [PSCustomObject]@{ Success = $false; Events = @(); Error = $rawResult.Error; DcUsed = $rawResult.DcUsed; EventsCount = 0; CsvPath = $csvPath; FindingsPath = $jsonPath; EvtxPath = $evtxStatus.Path; EvtxExported = $evtxStatus.Success; EvtxMessage = $evtxStatus.Message; CoverageIncomplete = $false; CoverageMessage = '' }
     }
 
     if ($count -eq 0) {
@@ -228,7 +304,7 @@ function Invoke-IncidentKitADCollect {
             @() | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             @{ newAccounts = @(); adminGroupAdds = @(); rdpLogons = @(); externalIpLogons = @(); failurePeaksByAccount = @(); failurePeaksByIp = @() } | ConvertTo-Json -Depth 5 | Set-Content -Path $jsonPath -Encoding UTF8
         }
-        return [PSCustomObject]@{ Success = $true; Events = @(); Error = ''; DcUsed = $rawResult.DcUsed; EventsCount = 0; CsvPath = $csvPath; FindingsPath = $jsonPath; CoverageIncomplete = $rawResult.CoverageIncomplete; CoverageMessage = $rawResult.CoverageMessage }
+        return [PSCustomObject]@{ Success = $true; Events = @(); Error = ''; DcUsed = $rawResult.DcUsed; EventsCount = 0; CsvPath = $csvPath; FindingsPath = $jsonPath; EvtxPath = $evtxStatus.Path; EvtxExported = $evtxStatus.Success; EvtxMessage = $evtxStatus.Message; CoverageIncomplete = $rawResult.CoverageIncomplete; CoverageMessage = $rawResult.CoverageMessage }
     }
 
     $rows = Export-ADEventsToCsvRows -Events $events
@@ -238,7 +314,7 @@ function Invoke-IncidentKitADCollect {
         $findings | ConvertTo-Json -Depth 5 | Set-Content -Path $jsonPath -Encoding UTF8
     }
 
-    return [PSCustomObject]@{ Success = $true; Events = $events; Error = ''; DcUsed = $rawResult.DcUsed; EventsCount = $count; CsvPath = $csvPath; FindingsPath = $jsonPath; CoverageIncomplete = $rawResult.CoverageIncomplete; CoverageMessage = $rawResult.CoverageMessage }
+    return [PSCustomObject]@{ Success = $true; Events = $events; Error = ''; DcUsed = $rawResult.DcUsed; EventsCount = $count; CsvPath = $csvPath; FindingsPath = $jsonPath; EvtxPath = $evtxStatus.Path; EvtxExported = $evtxStatus.Success; EvtxMessage = $evtxStatus.Message; CoverageIncomplete = $rawResult.CoverageIncomplete; CoverageMessage = $rawResult.CoverageMessage }
 }
 
 export-modulemember -Function Invoke-IncidentKitADCollect, Get-ADSecurityEventsRaw, Get-ADFindings, Test-IsRfc1918
