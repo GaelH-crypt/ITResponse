@@ -246,11 +246,6 @@ function Import-TimelineFromFindings {
                     [void]$rows.Add((Get-TimelineRow -Timestamp $tsFallback -Source 'Exchange-Finding' -EventDescription "Transfert externe vers $($x.address)" -Account $x.mailbox -HostName ''))
                 }
             }
-            if ($ex.suspiciousDelegations) {
-                foreach ($x in $ex.suspiciousDelegations) {
-                    [void]$rows.Add((Get-TimelineRow -Timestamp $tsFallback -Source 'Exchange-Finding' -EventDescription "Délégation inattendue [$($x.DelegationType)] vers $($x.Delegate)" -Account $x.MailboxIdentity -HostName ''))
-                }
-            }
         } catch {
             & $Log "Exchange findings : $_"
             & $Log "Exception: $($_.Exception.GetType().FullName)"

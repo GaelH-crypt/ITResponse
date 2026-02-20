@@ -155,7 +155,7 @@ try {
     if ($_.ScriptStackTrace) { & $script:Log "StackTrace: $($_.ScriptStackTrace)" }
 }
 $exStatus = if ($exResult.Success) { "OK" } else { "Erreur / Non accessible" }
-$exDetail = if ($exResult.Error) { $exResult.Error } else { if ($exResult.Success) { "Règles, forwarding et délégations exportés" } else { "Vérifier connectivité et identifiants" } }
+$exDetail = if ($exResult.Error) { $exResult.Error } else { if ($exResult.Success) { "Règles et forwarding exportés" } else { "Vérifier connectivité et identifiants" } }
 
 # --- Endpoint ---
 $epResult = $null
@@ -245,7 +245,7 @@ Invoke-IncidentKitReport -TemplatePath $templatePath -OutputReportPath (Join-Pat
 
 $doneList = @()
 if ($adResult.Success) { $doneList += "Collecte AD ($($adResult.EventsCount) événements)." }
-if ($exResult.Success) { $doneList += "Collecte Exchange (règles + forwarding + délégations optionnelles)." }
+if ($exResult.Success) { $doneList += "Collecte Exchange (règles + forwarding)." }
 if ($epResult.Success -and -not $epResult.Skipped) { $doneList += "Collecte Endpoint." }
 $doneList += "Score EBIOS et rapport générés."
 

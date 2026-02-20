@@ -264,20 +264,36 @@ function Invoke-IncidentKitExchangeCollect {
                     }
 
                     try {
-                        $sendAsPerms = Get-ADPermission -Identity $mailboxIdentity -ErrorAction SilentlyContinue | Where-Object {
-                            $_.ExtendedRights -contains 'Send As' -and
-                            -not $_.IsInherited -and
-                            $_.User -and
-                            $_.User.ToString() -notmatch 'NT AUTHORITY\\SELF|S-1-5-10|S-1-5-21|DiscoverySearchMailbox|HealthMailbox|Exchange Trusted Subsystem'
+                        $sendAsRows = @()
+                        if (Get-Command -Name 'Get-ADPermission' -ErrorAction SilentlyContinue) {
+                            $sendAsPerms = Get-ADPermission -Identity $mailboxIdentity -ErrorAction SilentlyContinue | Where-Object {
+                                $_.ExtendedRights -contains 'Send As' -and
+                                -not $_.IsInherited -and
+                                $_.User -and
+                                $_.User.ToString() -notmatch 'NT AUTHORITY\\SELF|S-1-5-10|S-1-5-21|DiscoverySearchMailbox|HealthMailbox|Exchange Trusted Subsystem'
+                            }
+                            foreach ($p in $sendAsPerms) {
+                                $sendAsRows += [PSCustomObject]@{ Delegate = $p.User.ToString(); Source = 'Get-ADPermission' }
+                            }
+                        } elseif (Get-Command -Name 'Get-RecipientPermission' -ErrorAction SilentlyContinue) {
+                            $sendAsPerms = Get-RecipientPermission -Identity $mailboxIdentity -ErrorAction SilentlyContinue | Where-Object {
+                                $_.AccessRights -match 'SendAs' -and
+                                $_.Trustee -and
+                                $_.Trustee.ToString() -notmatch 'NT AUTHORITY\\SELF|S-1-5-10|S-1-5-21|DiscoverySearchMailbox|HealthMailbox|Exchange Trusted Subsystem'
+                            }
+                            foreach ($p in $sendAsPerms) {
+                                $sendAsRows += [PSCustomObject]@{ Delegate = $p.Trustee.ToString(); Source = 'Get-RecipientPermission' }
+                            }
                         }
-                        foreach ($p in $sendAsPerms) {
-                            $delegate = $p.User.ToString()
+
+                        foreach ($sendAs in $sendAsRows) {
+                            $delegate = $sendAs.Delegate
                             $unexpectedReason = Get-MailboxDelegationUnexpectedReason -MailboxIdentity $mailboxIdentity -DelegateIdentity $delegate -ExpectedDelegates $expectedDelegates
                             $row = [PSCustomObject]@{
                                 MailboxIdentity = $mailboxIdentity
                                 Delegate        = $delegate
                                 DelegationType  = 'SendAs'
-                                Source          = 'Get-ADPermission'
+                                Source          = $sendAs.Source
                                 IsUnexpected    = [bool]($null -ne $unexpectedReason)
                                 Reason          = $unexpectedReason
                             }
