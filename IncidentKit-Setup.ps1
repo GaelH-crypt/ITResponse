@@ -143,7 +143,7 @@ if ($exchangeServer) {
         psUri      = $exchangePsUri
         auth       = $exchangeAuth
         useSSL     = $exchangeUseSSL
-        checks     = @{ inboxRules = $true; forwarding = $true }
+        checks     = @{ inboxRules = $true; forwarding = $true; transportRules = $false; sendConnectors = $false }
     }
 }
 

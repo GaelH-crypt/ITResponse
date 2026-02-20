@@ -23,7 +23,9 @@
     "useSSL": false,
     "checks": {
       "inboxRules": true,
-      "forwarding": true
+      "forwarding": true,
+      "transportRules": false,
+      "sendConnectors": false
     }
   },
   "endpoint": {

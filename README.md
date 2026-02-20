@@ -81,7 +81,7 @@ Le déroulement est volontairement simple : **collecte → analyse → rapport �
 L’outil interroge dans l’ordre :
 
 - **Active Directory** : journaux de sécurité d’un contrôleur de domaine (événements de connexion, création de comptes, modifications de groupes, etc.) sur une fenêtre de temps configurée (ex. 7 jours).
-- **Exchange** (si configuré) : règles de boîtes aux lettres et paramètres de transfert (forwarding) pour repérer des redirections vers l’extérieur.
+- **Exchange** (si configuré) : règles de boîtes aux lettres, paramètres de transfert (forwarding), et contrôles optionnels sur les Transport Rules / Send Connectors.
 - **Endpoint** (si vous avez indiqué un poste cible avec `-TargetHost`) : processus, services, tâches planifiées, connexions réseau (netstat), fichiers récents, éléments de type Autoruns, et repérage de processus aux noms suspects.
 
 Aucune modification n’est faite sur les systèmes : **lecture et export uniquement**.
@@ -227,7 +227,7 @@ Le fichier `config.json` pilote tous les composants. Chaque section est décrite
 | **psUri** | URI du Exchange Management Shell (ex. `http://mail.contoso.local/PowerShell/` ou `https://...`). |
 | **auth** | Méthode d’authentification : `Kerberos` (poste joint au domaine) ou `Negotiate` / `NTLM` depuis un poste hors domaine. |
 | **useSSL** | `true` si l’URI utilise HTTPS, sinon `false`. |
-| **checks** | Sous-objet : `inboxRules: true` pour les règles de boîte, `forwarding: true` pour les transferts. Mettre à `false` pour désactiver une vérification. |
+| **checks** | Sous-objet : `inboxRules: true` pour les règles de boîte, `forwarding: true` pour les transferts, `transportRules: false` (par défaut) pour détecter `BccTo` / `RedirectMessageTo` / `CopyTo`, et `sendConnectors: false` (par défaut) pour relever les SmartHosts externes. Mettre à `false` pour désactiver une vérification. |
 
 ### Endpoint (endpoint)
 
@@ -282,7 +282,7 @@ Pour une analyse avancée des adresses IP (module d’analyse IP optionnel), vou
     "psUri": "http://mail.contoso.local/PowerShell/",
     "auth": "Kerberos",
     "useSSL": false,
-    "checks": { "inboxRules": true, "forwarding": true }
+    "checks": { "inboxRules": true, "forwarding": true, "transportRules": false, "sendConnectors": false }
   },
   "endpoint": {
     "collectProcesses": true,
@@ -454,6 +454,7 @@ En résumé : **d’abord collecter et documenter, ensuite décider et agir.**
 
 - **Règles de boîte aux lettres suspectes** : règles qui redirigent, suppriment ou déplacent des mails sans justification = **très suspect** (technique courante après compromission de boîte).
 - **Transfert (forwarding) vers adresses externes** : redirection des e-mails vers une adresse hors de votre domaine = **grave** ; souvent utilisé pour exfiltrer des données ou garder une copie des mails.
+- Exports Exchange complémentaires (si activés) : `Exchange/exchange_transport_rules.csv`, `Exchange/exchange_connectors.csv`, et `Exchange/findings.json` (copie de `Exchange/exchange_findings.json`).
 
 ### Coverage logs (couverture des journaux)
 
