@@ -1,0 +1,16 @@
+Résumé exécutif
+
+Ce que nous savons
+- Une activité suspecte a été observée sur des comptes de messagerie critiques.
+- Des règles de transfert et des connexions inhabituelles suggèrent un risque d’exfiltration.
+- Le périmètre initial inclut des boîtes VIP et des adresses IP à vérifier en priorité.
+
+Ce que nous ne savons pas encore
+- L’étendue exacte de la compromission reste à confirmer via les logs d’authentification détaillés.
+- Le volume et la nature des données potentiellement exfiltrées dépendent de l’analyse des logs de messagerie.
+- Le point d’entrée initial ne peut pas être confirmé sans corrélation complète des logs endpoint et cloud.
+
+Prochaines actions
+- Collecter et corréler en priorité les logs M365, Azure AD et endpoint sur la période suspecte.
+- Isoler les comptes/terminaux à risque et forcer la réinitialisation des accès sensibles.
+- Finaliser la chronologie d’incident puis adapter le plan de remédiation et de communication.
