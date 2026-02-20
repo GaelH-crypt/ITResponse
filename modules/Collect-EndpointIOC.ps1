@@ -11,15 +11,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 param()
 
-function Get-Sha256Hash {
-    param([string]$FilePath)
-    if (-not $FilePath -or -not (Test-Path -LiteralPath $FilePath -ErrorAction SilentlyContinue)) { return $null }
-    try {
-        return (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256 -ErrorAction Stop).Hash
-    } catch {
-        return $null
-    }
-}
+$utilsPath = Join-Path $PSScriptRoot 'IncidentKit-Utils.ps1'
+if (Test-Path $utilsPath) { . $utilsPath }
 
 function Collect-EndpointIOC {
     [CmdletBinding(SupportsShouldProcess)]
@@ -38,9 +31,7 @@ function Collect-EndpointIOC {
     }
 
     $outDir = [System.IO.Path]::GetDirectoryName($OutputPath)
-    if (-not (Test-Path $outDir)) {
-        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-    }
+    if ($outDir) { Ensure-Directory -Path $outDir | Out-Null }
 
     # --- Processus en cours ---
     try {
@@ -162,7 +153,7 @@ function Collect-EndpointIOC {
             try {
                 Get-ChildItem -Path $dir -Recurse -Filter $ext -File -ErrorAction SilentlyContinue | ForEach-Object {
                     if ($seenPaths.Add($_.FullName)) {
-                        $hash = Get-Sha256Hash -FilePath $_.FullName
+                        $hash = Get-Sha256 -FilePath $_.FullName
                         $manifest.FileHashes += @{
                             FullName     = $_.FullName
                             Length       = $_.Length
