@@ -48,6 +48,9 @@ foreach ($f in @('IncidentKit-Config.ps1', 'Check-LoggingHealth.ps1', 'IncidentK
     if (Test-Path $path) { . $path }
 }
 
+$utilsPath = Join-Path $moduleDir 'IncidentKit-Utils.ps1'
+if (Test-Path $utilsPath) { . $utilsPath }
+
 # Résolution du chemin de config
 $configPath = $ProfilePath
 if (-not [System.IO.Path]::IsPathRooted($configPath)) {
@@ -96,23 +99,18 @@ if (-not $isDomainJoined -or $CredentialMode -eq 'Prompt') {
 
 # Création dossier + copie du transcript early dans Report (on continue d'écrire dans le même transcript, pas de second Start-Transcript)
 if (-not $WhatIf) {
-    if (-not (Test-Path $runDir)) { New-Item -ItemType Directory -Path $runDir -Force | Out-Null }
+    Ensure-Directory -Path $runDir | Out-Null
     $logDir = Join-Path $runDir 'Report'
-    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    Ensure-Directory -Path $logDir | Out-Null
     $transcriptCopyPath = Join-Path $logDir (Split-Path $earlyTranscript -Leaf)
     Copy-Item -Path $earlyTranscript -Destination $transcriptCopyPath -Force -ErrorAction SilentlyContinue
 }
 $script:LogLines = [System.Collections.ArrayList]::new()
+$script:LogFilePath = Join-Path $runDir 'Report\incidentkit.log'
 $script:Log = {
     param($msg)
-    $line = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $msg"
+    $line = Write-IncidentLog -Message $msg -LogFilePath $script:LogFilePath -WhatIf:$WhatIf
     [void]$script:LogLines.Add($line)
-    Write-Verbose $line
-    if (-not $WhatIf) {
-        $logFile = Join-Path $runDir 'Report\incidentkit.log'
-        $logDir = Split-Path $logFile -Parent
-        if (Test-Path $logDir) { Add-Content -Path $logFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue }
-    }
 }
 
 & $script:Log "IncidentKit démarré - Mode: $Mode, Type: $IncidentType, Cible: $TargetHost, Jours: $days, Config: $configPath"

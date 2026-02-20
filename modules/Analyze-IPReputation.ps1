@@ -9,39 +9,15 @@
 [CmdletBinding()]
 param()
 
+$utilsPath = Join-Path $PSScriptRoot 'IncidentKit-Utils.ps1'
+if (Test-Path $utilsPath) { . $utilsPath }
+
 # Seuils pour le calcul du risque (ajustables)
 $script:ThresholdFailedAttemptsHigh = 20
 $script:ThresholdFailedAttemptsMedium = 5
 $script:ThresholdDistinctAccountsHigh = 10
 $script:ThresholdDistinctAccountsMedium = 4
 $script:ThresholdEventsNewIp = 3   # IP avec très peu d'événements = "jamais vue" dans la fenêtre
-
-function Test-IPShouldIgnore {
-    <#
-    .SYNOPSIS
-        Indique si une IP doit être ignorée (RFC1918, loopback, link-local, CGNAT).
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Ip
-    )
-    if (-not $Ip -or $Ip -eq '-' -or $Ip -match '^::') { return $true }
-    if ($Ip -notmatch '^(\d+)\.(\d+)\.(\d+)\.(\d+)$') { return $true }  # IPv6 ou invalide : on ignore
-    $a = [int]$matches[1]
-    $b = [int]$matches[2]
-    # RFC1918 : 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-    if ($a -eq 10) { return $true }
-    if ($a -eq 172 -and $b -ge 16 -and $b -le 31) { return $true }
-    if ($a -eq 192 -and $b -eq 168) { return $true }
-    # Loopback : 127.0.0.0/8
-    if ($a -eq 127) { return $true }
-    # Link-local : 169.254.0.0/16
-    if ($a -eq 169 -and $b -eq 254) { return $true }
-    # CGNAT : 100.64.0.0/10
-    if ($a -eq 100 -and $b -ge 64 -and $b -le 127) { return $true }
-    return $false
-}
 
 function Get-IPWhitelist {
     param([string]$WhitelistPath)
@@ -110,9 +86,7 @@ function Find-SuspiciousIP {
         Write-Warning "Fichier CSV introuvable : $CsvPath"
         $empty = @()
         $outDir = [System.IO.Path]::GetDirectoryName($OutputPath)
-        if (-not [string]::IsNullOrEmpty($outDir) -and -not (Test-Path $outDir)) {
-            New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-        }
+        if (-not [string]::IsNullOrEmpty($outDir)) { Ensure-Directory -Path $outDir | Out-Null }
         $empty | ConvertTo-Json -Depth 3 | Set-Content -Path $OutputPath -Encoding UTF8
         return $empty
     }
@@ -176,9 +150,7 @@ function Find-SuspiciousIP {
     $sorted = $suspicious | Sort-Object { $riskOrder[$_.Risk] }, { -$_.FailedAttempts }
 
     $outDir = [System.IO.Path]::GetDirectoryName($OutputPath)
-    if (-not [string]::IsNullOrEmpty($outDir) -and -not (Test-Path $outDir)) {
-        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-    }
+    if (-not [string]::IsNullOrEmpty($outDir)) { Ensure-Directory -Path $outDir | Out-Null }
     $sorted | ConvertTo-Json -Depth 4 | Set-Content -Path $OutputPath -Encoding UTF8
     Write-Verbose "Sortie enregistrée : $OutputPath ($($sorted.Count) IP suspecte(s))."
     return $sorted
