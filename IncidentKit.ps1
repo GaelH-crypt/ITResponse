@@ -268,6 +268,40 @@ try {
     if ($_.ScriptStackTrace) { & $script:Log "StackTrace: $($_.ScriptStackTrace)" }
 }
 
+# --- Integrity Manifest ---
+if (-not $WhatIf -and (Test-Path $runDir)) {
+    try {
+        $manifestEntries = Get-ChildItem -Path $runDir -File -Recurse -ErrorAction Stop |
+            Where-Object { $_.FullName -ne (Join-Path $runDir 'Evidence.zip') } |
+            ForEach-Object {
+                $hash = Get-FileHash -Path $_.FullName -Algorithm SHA256 -ErrorAction Stop
+                [PSCustomObject]@{
+                    path = $_.FullName.Substring($runDir.Length).TrimStart('\\', '/')
+                    sha256 = $hash.Hash.ToLowerInvariant()
+                }
+            }
+
+        $manifestJsonPath = Join-Path $reportDir 'evidence_manifest.json'
+        $manifestTxtPath = Join-Path $reportDir 'evidence_manifest.txt'
+
+        $manifestEntries |
+            Sort-Object path |
+            ConvertTo-Json -Depth 4 |
+            Set-Content -Path $manifestJsonPath -Encoding UTF8
+
+        $manifestEntries |
+            Sort-Object path |
+            ForEach-Object { "{0}  {1}" -f $_.sha256, $_.path } |
+            Set-Content -Path $manifestTxtPath -Encoding UTF8
+
+        & $script:Log "Integrity manifest généré : $manifestJsonPath ; $manifestTxtPath"
+    } catch {
+        & $script:Log "Integrity Manifest : $_"
+        & $script:Log "Exception: $($_.Exception.GetType().FullName)"
+        if ($_.ScriptStackTrace) { & $script:Log "StackTrace: $($_.ScriptStackTrace)" }
+    }
+}
+
 # ZIP preuves (optionnel)
 if ($config.output.zipEvidence -and -not $WhatIf -and (Test-Path $runDir)) {
     $zipPath = Join-Path $runDir 'Evidence.zip'
