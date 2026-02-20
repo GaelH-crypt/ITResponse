@@ -91,6 +91,57 @@ function Get-EndpointDataLocal {
         }
     }
     $suspects | Export-Csv -Path (Join-Path $OutDir 'suspicious_processes.csv') -NoTypeInformation -Encoding UTF8
+
+    $suspiciousDirs = @(
+        [Environment]::GetFolderPath('LocalApplicationData'),
+        [Environment]::GetFolderPath('ApplicationData'),
+        [System.IO.Path]::GetTempPath(),
+        (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+    $suspiciousFiles = [System.Collections.Generic.List[object]]::new()
+    $seenSuspiciousFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($dir in $suspiciousDirs) {
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        try {
+            Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in @('.exe', '.dll') } |
+                ForEach-Object {
+                    if ($seenSuspiciousFiles.Add($_.FullName)) {
+                        $suspiciousFiles.Add([PSCustomObject]@{
+                            FullName      = $_.FullName
+                            Extension     = $_.Extension
+                            Length        = $_.Length
+                            LastWriteTime = $_.LastWriteTime
+                        })
+                    }
+                }
+        } catch {
+            & $Log "SuspiciousFiles scan $dir : $_"
+            & $Log "Exception: $($_.Exception.GetType().FullName)"
+            if ($_.ScriptStackTrace) { & $Log "StackTrace: $($_.ScriptStackTrace)" }
+        }
+    }
+
+    $topSuspiciousFiles = $suspiciousFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 200
+    $topSuspiciousFiles | Export-Csv -Path (Join-Path $OutDir 'endpoint_suspicious_files.csv') -NoTypeInformation -Encoding UTF8
+
+    $suspiciousHashes = [System.Collections.ArrayList]::new()
+    foreach ($item in ($topSuspiciousFiles | Select-Object -First 50)) {
+        $hash = $null
+        try {
+            $hash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+        } catch {
+            $hash = $null
+        }
+        [void]$suspiciousHashes.Add([PSCustomObject]@{
+            FullName      = $item.FullName
+            LastWriteTime = $item.LastWriteTime
+            SHA256        = $hash
+        })
+    }
+    $suspiciousHashes | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $OutDir 'hashes.json') -Encoding UTF8
+
     return $true
 }
 
@@ -150,7 +201,38 @@ function Invoke-IncidentKitEndpointCollect {
             $svcs = Get-Service | Select-Object Name, DisplayName, Status, StartType
             $tasks = Get-ScheduledTask | Select-Object TaskName, TaskPath, State
             $netstat = netstat -ano
-            @{ Processes = $procs; Services = $svcs; ScheduledTasks = $tasks; Autoruns = $autoruns; Netstat = $netstat }
+            $suspiciousDirs = @(
+                [Environment]::GetFolderPath('LocalApplicationData'),
+                [Environment]::GetFolderPath('ApplicationData'),
+                [System.IO.Path]::GetTempPath(),
+                (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads')
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+            $suspiciousFiles = foreach ($dir in $suspiciousDirs) {
+                if (-not (Test-Path -LiteralPath $dir)) { continue }
+                Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Extension -in @('.exe', '.dll') }
+            }
+            $topSuspiciousFiles = $suspiciousFiles |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -Unique FullName, Extension, Length, LastWriteTime -First 200
+            $suspiciousHashes = foreach ($item in ($topSuspiciousFiles | Select-Object -First 50)) {
+                $hash = $null
+                try { $hash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash } catch { }
+                [PSCustomObject]@{
+                    FullName      = $item.FullName
+                    LastWriteTime = $item.LastWriteTime
+                    SHA256        = $hash
+                }
+            }
+            @{
+                Processes       = $procs
+                Services        = $svcs
+                ScheduledTasks  = $tasks
+                Autoruns        = $autoruns
+                Netstat         = $netstat
+                SuspiciousFiles = $topSuspiciousFiles
+                SuspiciousHashes = $suspiciousHashes
+            }
         }
         $icmParams = @{ ComputerName = $TargetHost; ScriptBlock = $sb; ArgumentList = @(,$suspiciousNames) }
         if ($Credential) { $icmParams.Credential = $Credential }
@@ -161,6 +243,8 @@ function Invoke-IncidentKitEndpointCollect {
         $remoteData.ScheduledTasks | Export-Csv -Path (Join-Path $epDir 'scheduled_tasks.csv') -NoTypeInformation -Encoding UTF8
         $remoteData.Autoruns | Export-Csv -Path (Join-Path $epDir 'autoruns.csv') -NoTypeInformation -Encoding UTF8
         $remoteData.Netstat | Out-File -FilePath (Join-Path $epDir 'netstat.txt') -Encoding utf8
+        $remoteData.SuspiciousFiles | Export-Csv -Path (Join-Path $epDir 'endpoint_suspicious_files.csv') -NoTypeInformation -Encoding UTF8
+        $remoteData.SuspiciousHashes | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $epDir 'hashes.json') -Encoding UTF8
         return @{ Success = $true; OutputDir = $epDir; Remote = $true }
     } catch {
         & $Log "Endpoint distant $TargetHost : $_ (WinRM peut être indisponible)."
