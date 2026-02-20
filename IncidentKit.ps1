@@ -43,7 +43,7 @@ try {
 
 # Chargement des modules (dot-source)
 $moduleDir = Join-Path $script:RootDir 'modules'
-foreach ($f in @('IncidentKit-Config.ps1', 'Check-LoggingHealth.ps1', 'IncidentKit-AD.ps1', 'IncidentKit-Exchange.ps1', 'IncidentKit-Endpoint.ps1', 'IncidentKit-EBIOS.ps1', 'IncidentKit-Report.ps1', 'Generate-ExecutiveSummary.ps1', 'Generate-Timeline.ps1', 'IncidentKit-Contain.ps1')) {
+foreach ($f in @('IncidentKit-Config.ps1', 'Check-LoggingHealth.ps1', 'IncidentKit-AD.ps1', 'IncidentKit-Exchange.ps1', 'IncidentKit-Endpoint.ps1', 'IncidentKit-EBIOS.ps1', 'IncidentKit-Report.ps1', 'Generate-ExecutiveSummary.ps1', 'Generate-Timeline.ps1', 'Evaluate-PreRansomware.ps1', 'IncidentKit-Contain.ps1')) {
     $path = Join-Path $moduleDir $f
     if (Test-Path $path) { . $path }
 }
@@ -258,6 +258,22 @@ if ($notDoneList.Count -eq 0) { $notDoneList += "Aucun." }
 New-ExecutiveSummaryTxt -Path (Join-Path $reportDir 'rapport_exec.txt') -IncidentType $IncidentType -ScoreLevel $ebios.Level -ScoreDetail "Gravité=$($ebios.Gravity), Vraisemblance=$($ebios.Likelihood), Score=$($ebios.Score)" -DoneList ($doneList -join "`n") -NotDoneList ($notDoneList -join "`n") -WhatIf:$WhatIf
 
 New-ExecutiveSummary -ReportDir $reportDir -IncidentType $IncidentType -SeverityLevel $ebios.Level -ActionsTaken ($doneList -join ' ') -WhatIf:$WhatIf
+
+try {
+    $assessment = Invoke-PreRansomwareAssessment `
+        -AdFindingsPath (Join-Path $runDir 'AD\ad_findings.json') `
+        -SuspiciousIpsPath (Join-Path $runDir 'AD\suspicious_ips.json') `
+        -ExchangeFindingsPath (Join-Path $runDir 'Exchange\exchange_findings.json') `
+        -EndpointIocManifestPath (Join-Path $runDir 'Endpoint\ioc_manifest.json') `
+        -OutputPath (Join-Path $runDir 'Report\pre_ransomware_assessment.json') `
+        -ExecutiveSummaryPath (Join-Path $runDir 'Report\executive_summary.txt') `
+        -WhatIf:$WhatIf
+    & $script:Log "Pré-évaluation ransomware : Risk=$($assessment.Risk), Action=$($assessment.RecommendedAction)"
+} catch {
+    & $script:Log "Evaluate-PreRansomware : $_"
+    & $script:Log "Exception: $($_.Exception.GetType().FullName)"
+    if ($_.ScriptStackTrace) { & $script:Log "StackTrace: $($_.ScriptStackTrace)" }
+}
 
 # --- Timeline fusionnée ---
 try {
