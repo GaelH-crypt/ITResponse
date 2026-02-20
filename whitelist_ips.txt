@@ -1,0 +1,5 @@
+# Whitelist d'IP à exclure de l'analyse de réputation (une IP par ligne)
+# Lignes vides et lignes commençant par # sont ignorées.
+# Exemple :
+# 203.0.113.50
+# 198.51.100.22

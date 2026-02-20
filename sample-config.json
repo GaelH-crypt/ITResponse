@@ -1,0 +1,44 @@
+{
+  "_comment": "Configuration IncidentKit v0.1 - Collectivité territoriale. Ne jamais stocker de mots de passe.",
+  "org": {
+    "name": "Mon Organisation",
+    "timezone": "Romance Standard Time"
+  },
+  "ad": {
+    "domainFqdn": "contoso.local",
+    "domainNetbios": "CONTOSO",
+    "dcList": [ "dc01.contoso.local", "dc02.contoso.local" ],
+    "preferredDc": "dc01.contoso.local",
+    "eventIds": [ 4624, 4625, 4672, 4720, 4722, 4728, 4732, 4740 ],
+    "timeWindowDays": 7,
+    "exportPaths": {
+      "eventsCsv": "AD/analyse_ad.csv",
+      "findingsJson": "AD/ad_findings.json"
+    }
+  },
+  "exchange": {
+    "serverFqdn": "mail.contoso.local",
+    "psUri": "http://mail.contoso.local/PowerShell/",
+    "auth": "Kerberos",
+    "useSSL": false,
+    "checks": {
+      "inboxRules": true,
+      "forwarding": true
+    }
+  },
+  "endpoint": {
+    "collectProcesses": true,
+    "collectServices": true,
+    "collectScheduledTasks": true,
+    "collectNetstat": true,
+    "collectAutoruns": true,
+    "collectRecentFiles": true,
+    "collectFileHashes": true,
+    "suspiciousNames": [ "PDFClick.exe", "update.exe", "svchost.exe" ]
+  },
+  "output": {
+    "basePath": "Output",
+    "reportFormats": [ "md", "txt" ],
+    "zipEvidence": true
+  }
+}
